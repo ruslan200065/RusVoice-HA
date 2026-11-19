@@ -6,12 +6,36 @@ import pytest
 from rusvoice.app import models
 
 
-def sample_archive():
+def sample_archive(graph=("HCLr.fst", "Gr.fst")):
     mem = io.BytesIO()
-    with zipfile.ZipFile(mem, 'w') as file:
-        for suffix in ('am/final.mdl', 'conf/model.conf', 'graph/HCLG.fst'):
-            file.writestr(f'{models.VOSK_NAME}/{suffix}', 'fake-for-unit-test')
+    with zipfile.ZipFile(mem, "w") as file:
+        for suffix in ("am/final.mdl", "conf/model.conf", *(f"graph/{name}" for name in graph)):
+            file.writestr(f"{models.VOSK_NAME}/{suffix}", "fake-for-unit-test")
     return mem.getvalue()
+
+@pytest.mark.parametrize("graph", [
+    ("HCLr.fst", "Gr.fst"),
+    ("HCLG.fst",),
+])
+def test_vosk_archive_graph_layouts(tmp_path, monkeypatch, graph):
+    monkeypatch.setattr(models, "fetch", lambda url, dest, callback, **kw:
+                        dest.write_bytes(sample_archive(graph)))
+    models.ensure_vosk(tmp_path)
+    assert models.vosk_installed(tmp_path / models.VOSK_NAME)
+
+@pytest.mark.parametrize("graph", [
+    (),
+    ("HCLr.fst",),
+    ("Gr.fst",),
+])
+def test_reject_incomplete_graphs(tmp_path, monkeypatch, graph):
+    model = tmp_path / models.VOSK_NAME
+    model.mkdir()
+    for name in ("am/final.mdl", "conf/model.conf", *(f"graph/{x}" for x in graph)):
+        path = model / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"ok")
+    assert not models.vosk_installed(model)
 
 
 def test_vosk_install_and_cache(tmp_path, monkeypatch):

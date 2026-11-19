@@ -112,8 +112,21 @@ def _safe_members(members, root_name: str, limit: int = MAX_UNPACKED_BYTES):
 
 
 def vosk_installed(folder: Path) -> bool:
-    return all((folder / x).is_file() and (folder / x).stat().st_size > 0 for x in
-               ("am/final.mdl", "conf/model.conf", "graph/HCLG.fst"))
+    """Vosk supports either a compact HCLr+Gr graph or a monolithic HCLG graph.
+
+    The official vosk-model-small-ru-0.22 ships with HCLr.fst + Gr.fst.
+    Reject missing/incomplete graphs, not an otherwise valid compact model.
+    """
+    required = ("am/final.mdl", "conf/model.conf")
+    if not all((folder / name).is_file() and (folder / name).stat().st_size > 0
+               for name in required):
+        return False
+
+    def exists(name: str) -> bool:
+        path = folder / "graph" / name
+        return path.is_file() and path.stat().st_size > 0
+
+    return exists("HCLG.fst") or (exists("HCLr.fst") and exists("Gr.fst"))
 
 
 def ensure_vosk(root: Path, callback: Progress | None = None) -> None:

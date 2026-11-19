@@ -188,7 +188,7 @@ async def main():
     )
     info = Info(tts=[TtsProgram(name=OPTS["tts_engine"], description="RusVoice local TTS",
                                 attribution=Attribution(name="RusVoice-HA", url="https://github.com/ruslan200065/RusVoice-HA"),
-                                installed=True, version="0.2.0", voices=voices,
+                                installed=True, version="0.2.1", voices=voices,
                                 supports_synthesize_streaming=True)])
     await AsyncServer.from_uri("tcp://0.0.0.0:10200").run(partial(Handler, info, synth))
 

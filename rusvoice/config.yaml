@@ -1,6 +1,6 @@
 name: RusVoice HA
 slug: rusvoice
-version: 0.2.0
+version: 0.2.1
 url: https://github.com/ruslan200065/RusVoice-HA
 description: Локальный русский STT + TTS (Piper, Supertonic 3, Vosk) с прогрессом загрузки моделей
 arch:

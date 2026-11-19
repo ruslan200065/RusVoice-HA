@@ -121,7 +121,7 @@ async def lifespan(_app):
         await runtime.stop()
 
 
-app = FastAPI(title="RusVoice HA", version="0.2.0", lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(title="RusVoice HA", version="0.2.1", lifespan=lifespan, docs_url=None, redoc_url=None)
 
 
 def authorize(request: Request):
@@ -148,7 +148,7 @@ async def index():
 @app.get("/api/status")
 async def status(request: Request):
     authorize(request)
-    return {"name": "RusVoice HA", "version": "0.2.0", "language": "ru",
+    return {"name": "RusVoice HA", "version": "0.2.1", "language": "ru",
             "tts_engine": OPTS["tts_engine"], "voice": OPTS["voice"] if OPTS["tts_engine"] == "piper" else f"supertonic-3 / speaker {OPTS['supertonic_speaker']}", "stt_model": OPTS["stt_model"],
             "downloads": runtime.downloads,
             "streaming": {"stt": OPTS["stt_streaming"], "tts": OPTS["tts_streaming"]},
