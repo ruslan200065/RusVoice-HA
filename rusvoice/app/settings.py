@@ -6,6 +6,7 @@ from pathlib import Path
 DEFAULTS = {
     "tts_engine": "piper",
     "voice": "ru_RU-irina-medium",
+    "edge_voice": "ru-RU-DmitryNeural",
     "supertonic_speaker": 0,
     "supertonic_steps": 4,
     "tts_threads": 2,
@@ -19,6 +20,7 @@ DEFAULTS = {
     "api_token": "",
 }
 VOICES = {"ru_RU-dmitri-medium", "ru_RU-denis-medium", "ru_RU-irina-medium", "ru_RU-ruslan-medium"}
+EDGE_VOICES = {"ru-RU-DmitryNeural", "ru-RU-SvetlanaNeural"}
 STT_MODELS = {"vosk-model-small-ru-0.22"}
 
 
@@ -30,8 +32,10 @@ def load_options(path: str | Path = "/data/options.json") -> dict:
         if not isinstance(raw, dict):
             raise ValueError("options.json must be an object")
         result.update({k: v for k, v in raw.items() if k in DEFAULTS})
-    if result["tts_engine"] not in ("piper", "supertonic"):
-        raise ValueError("tts_engine must be piper or supertonic")
+    if result["tts_engine"] not in ("piper", "supertonic", "edge"):
+        raise ValueError("tts_engine must be piper, supertonic or edge")
+    if result["edge_voice"] not in EDGE_VOICES:
+        raise ValueError("Unsupported Edge voice")
     if result["voice"] not in VOICES or result["stt_model"] not in STT_MODELS:
         raise ValueError("Unsupported voice or STT model")
     for key in ("stt_streaming", "tts_streaming"):

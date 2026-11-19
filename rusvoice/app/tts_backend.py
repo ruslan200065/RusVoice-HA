@@ -1,6 +1,6 @@
 """Low-latency Wyoming TTS. Piper streams synthesis output directly, without WAV tempfile.
 
-Supertonic 3 INT8 is an optional, higher-quality, sentence-based backend.
+Supertonic 3 INT8 is experimental. Edge Neural is an explicit cloud-only option.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from wyoming.server import AsyncEventHandler, AsyncServer
 from wyoming.tts import Synthesize, SynthesizeStart, SynthesizeChunk, SynthesizeStop, SynthesizeStopped
 
 from .models import SUPERTONIC_NAME
-from .settings import load_options
+from .settings import EDGE_VOICES, load_options
 
 LOG = logging.getLogger("rusvoice.tts")
 OPTS = load_options()
@@ -107,6 +107,7 @@ class Handler(AsyncEventHandler):
         self._stream = False
         self._format = None
         self._speaker = None
+        self._voice_name = None
 
     async def handle_event(self, event: Event) -> bool:
         try:
@@ -118,6 +119,7 @@ class Handler(AsyncEventHandler):
                 self._buffer = ""
                 self._format = None
                 self._speaker = request.voice.speaker if request.voice else None
+                self._voice_name = request.voice.name if request.voice else None
             elif SynthesizeChunk.is_type(event.type):
                 if not self._stream:
                     raise ValueError("Received synthesize-chunk without synthesize-start")
@@ -140,6 +142,7 @@ class Handler(AsyncEventHandler):
                 request = Synthesize.from_event(event)
                 self._format = None
                 self._speaker = request.voice.speaker if request.voice else None
+                self._voice_name = request.voice.name if request.voice else None
                 sentences, _ = split_sentences(request.text, flush=True)
                 for sentence in sentences:
                     await self.emit(sentence)
@@ -153,31 +156,55 @@ class Handler(AsyncEventHandler):
             await self.write_event(Event(type="error", data={"text": str(exc), "code": exc.__class__.__name__}))
             return True
 
+
     async def emit(self, sentence: str):
-        # Never parallelize a single ONNX/Torch model. Run blocking inference
-        # in a worker thread and yield audio chunks immediately as they arrive.
+        # Serialize a shared synthesizer per process; TTS streaming is preserved.
         async with LOCK:
+            if OPTS["tts_engine"] == "edge":
+                async for item in self.synth.synthesize_async(sentence, self._voice_name):
+                    await self.write_pcm(item)
+                return
+
             generator = self.synth.synthesize(sentence, self._speaker)
             sentinel = object()
+
             def next_chunk():
                 return next(generator, sentinel)
+
             while True:
                 item = await asyncio.to_thread(next_chunk)
                 if item is sentinel:
                     break
-                rate, width, channels, pcm = item
-                if self._format is None:
-                    self._format = (rate, width, channels)
-                    await self.write_event(AudioStart(rate=rate, width=width, channels=channels).event())
-                elif self._format != (rate, width, channels):
-                    raise RuntimeError("TTS format changed within a stream")
-                await self.write_event(AudioChunk(rate=rate, width=width, channels=channels, audio=pcm).event())
+                await self.write_pcm(item)
 
+    async def write_pcm(self, item):
+        rate, width, channels, pcm = item
+        if self._format is None:
+            self._format = (rate, width, channels)
+            await self.write_event(AudioStart(rate=rate, width=width, channels=channels).event())
+        elif self._format != (rate, width, channels):
+            raise RuntimeError("TTS format changed within a stream")
+        if pcm:
+            await self.write_event(AudioChunk(rate=rate, width=width, channels=channels, audio=pcm).event())
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-    synth = Supertonic() if OPTS["tts_engine"] == "supertonic" else Piper()
-    voices = (
+    if OPTS["tts_engine"] == "edge":
+        from .edge_backend import Edge
+        synth = Edge()
+    elif OPTS["tts_engine"] == "supertonic":
+        synth = Supertonic()
+    else:
+        synth = Piper()
+    if OPTS["tts_engine"] == "edge":
+        voices = [
+            TtsVoice(name=name, description=f"Microsoft Edge Neural / {name} (ONLINE)",
+                     attribution=Attribution(name="Microsoft Edge Read Aloud", url="https://www.microsoft.com/edge"),
+                     installed=True, version=None, languages=["ru", "ru_RU"], speakers=None)
+            for name in sorted(EDGE_VOICES)
+        ]
+    else:
+        voices = (
         [TtsVoice(name="supertonic-3", description="Supertonic 3 Russian (10 speakers)",
                   attribution=Attribution(name="Supertone", url="https://huggingface.co/Supertone/supertonic-3"),
                   installed=True, version=None, languages=["ru", "ru_RU"], speakers=[TtsVoiceSpeaker(name=str(i)) for i in range(10)])]
@@ -185,10 +212,10 @@ async def main():
         else [TtsVoice(name=OPTS["voice"], description=OPTS["voice"],
                        attribution=Attribution(name="Piper",url="https://github.com/OHF-Voice/piper1-gpl"),
                        installed=True, version=None, languages=["ru", "ru_RU"], speakers=None)]
-    )
-    info = Info(tts=[TtsProgram(name=OPTS["tts_engine"], description="RusVoice local TTS",
+        )
+    info = Info(tts=[TtsProgram(name=OPTS["tts_engine"], description="RusVoice TTS (Edge mode uses Microsoft online service)",
                                 attribution=Attribution(name="RusVoice-HA", url="https://github.com/ruslan200065/RusVoice-HA"),
-                                installed=True, version="0.2.1", voices=voices,
+                                installed=True, version="0.3.0", voices=voices,
                                 supports_synthesize_streaming=True)])
     await AsyncServer.from_uri("tcp://0.0.0.0:10200").run(partial(Handler, info, synth))
 

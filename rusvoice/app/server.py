@@ -17,7 +17,7 @@ from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
 from wyoming.tts import Synthesize, SynthesizeVoice
 
-from .settings import load_options
+from .settings import EDGE_VOICES, load_options
 from .models import ensure_piper, ensure_vosk, ensure_supertonic
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -30,6 +30,7 @@ BACKENDS = {"tts": 10200, "stt": 10300}
 class TextInput(BaseModel):
     text: str = Field(min_length=1, max_length=900)
     speaker: int | None = Field(default=None, ge=0, le=9)
+    voice: str | None = Field(default=None, max_length=80)
 
 
 class Runtime:
@@ -61,6 +62,9 @@ class Runtime:
             await asyncio.to_thread(ensure_vosk, DATA / "vosk", progress)
         elif OPTS["tts_engine"] == "supertonic":
             await asyncio.to_thread(ensure_supertonic, DATA / "supertonic", progress)
+        elif OPTS["tts_engine"] == "edge":
+            self.progress(name, phase="external", file="Edge Neural / Microsoft online")
+            return
         else:
             await asyncio.to_thread(ensure_piper, DATA / "piper", OPTS["voice"], progress)
 
@@ -70,10 +74,10 @@ class Runtime:
             try:
                 self.progress(name, phase="checking")
                 await self.prepare_model(name)
-                self.progress(name, phase="loading", error=None)
+                self.progress(name, phase="external" if name == "tts" and OPTS["tts_engine"] == "edge" else "loading", error=None)
                 LOG.info("Starting %s Wyoming server", name)
                 proc = await asyncio.create_subprocess_exec(*self.command(name))
-                self.progress(name, phase="installed")
+                self.progress(name, phase="external" if name == "tts" and OPTS["tts_engine"] == "edge" else "installed")
                 self.processes[name] = proc
                 returncode = await proc.wait()
                 self.last_exit[name] = returncode
@@ -121,7 +125,7 @@ async def lifespan(_app):
         await runtime.stop()
 
 
-app = FastAPI(title="RusVoice HA", version="0.2.1", lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(title="RusVoice HA", version="0.3.0", lifespan=lifespan, docs_url=None, redoc_url=None)
 
 
 def authorize(request: Request):
@@ -148,8 +152,11 @@ async def index():
 @app.get("/api/status")
 async def status(request: Request):
     authorize(request)
-    return {"name": "RusVoice HA", "version": "0.2.1", "language": "ru",
-            "tts_engine": OPTS["tts_engine"], "voice": OPTS["voice"] if OPTS["tts_engine"] == "piper" else f"supertonic-3 / speaker {OPTS['supertonic_speaker']}", "stt_model": OPTS["stt_model"],
+    return {"name": "RusVoice HA", "version": "0.3.0", "language": "ru",
+            "tts_engine": OPTS["tts_engine"], "voice": (OPTS["voice"] if OPTS["tts_engine"] == "piper" else
+                      OPTS["edge_voice"] if OPTS["tts_engine"] == "edge" else
+                      f"supertonic-3 / speaker {OPTS['supertonic_speaker']}"),
+            "tts_cloud": OPTS["tts_engine"] == "edge", "stt_model": OPTS["stt_model"],
             "downloads": runtime.downloads,
             "streaming": {"stt": OPTS["stt_streaming"], "tts": OPTS["tts_streaming"]},
             "wyoming": {name: {"port": port, "ready": await ready(port),
@@ -157,12 +164,15 @@ async def status(request: Request):
                         for name, port in BACKENDS.items()}}
 
 
-async def wyoming_tts(text: str, speaker: int | None = None):
+async def wyoming_tts(text: str, speaker: int | None = None, voice: str | None = None):
+    if voice is not None and (OPTS["tts_engine"] != "edge" or voice not in EDGE_VOICES):
+        raise HTTPException(422, "Invalid voice for selected TTS engine")
     client = AsyncTcpClient("127.0.0.1", 10200, connect_timeout=3, read_timeout=120)
     await client.connect()
     try:
         await client.write_event(Synthesize(text=text,
-                      voice=SynthesizeVoice(speaker=str(speaker)) if speaker is not None and OPTS["tts_engine"] == "supertonic" else None).event())
+                      voice=(SynthesizeVoice(name=voice) if voice and OPTS["tts_engine"] == "edge" else
+                             SynthesizeVoice(speaker=str(speaker)) if speaker is not None and OPTS["tts_engine"] == "supertonic" else None)).event())
         while True:
             event = await client.read_event()
             if event is None:
@@ -194,7 +204,7 @@ async def tts_audio(client):
 async def tts(body: TextInput, request: Request):
     authorize(request)
     try:
-        client, fmt = await wyoming_tts(body.text, body.speaker)
+        client, fmt = await wyoming_tts(body.text, body.speaker, body.voice)
         output = io.BytesIO()
         with wave.open(output, "wb") as wav:
             wav.setnchannels(fmt.channels)
@@ -213,7 +223,7 @@ async def tts_stream(body: TextInput, request: Request):
     """Progressive PCM16 bytes. Read format from response headers."""
     authorize(request)
     try:
-        client, fmt = await wyoming_tts(body.text, body.speaker)
+        client, fmt = await wyoming_tts(body.text, body.speaker, body.voice)
     except (OSError, RuntimeError, TimeoutError) as exc:
         raise HTTPException(503, "TTS unavailable") from exc
     return StreamingResponse(tts_audio(client), media_type="application/octet-stream",

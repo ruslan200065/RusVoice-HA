@@ -32,6 +32,22 @@ def test_reject_bad_streaming(tmp_path, monkeypatch):
         load_options(file)
 
 
+def test_edge_opt_in_and_validation(tmp_path, monkeypatch):
+    file = tmp_path / "options.json"
+    file.write_text(json.dumps({"tts_engine": "edge", "edge_voice": "ru-RU-SvetlanaNeural"}))
+    monkeypatch.delenv("RUSVOICE_OPTIONS", raising=False)
+    options = load_options(file)
+    assert options["tts_engine"] == "edge"
+    assert options["edge_voice"] == "ru-RU-SvetlanaNeural"
+
+@pytest.mark.parametrize("voice", ["invalid", "../../secret", "en-US-JennyNeural"])
+def test_edge_rejects_unapproved_voice(tmp_path, monkeypatch, voice):
+    file = tmp_path / "options.json"
+    file.write_text(json.dumps({"tts_engine": "edge", "edge_voice": voice}))
+    monkeypatch.delenv("RUSVOICE_OPTIONS", raising=False)
+    with pytest.raises(ValueError):
+        load_options(file)
+
 def test_supertonic_valid_options(tmp_path, monkeypatch):
     file = tmp_path / 'options.json'
     file.write_text(json.dumps({'tts_engine': 'supertonic', 'supertonic_steps': 2, 'supertonic_speaker': 9}))
