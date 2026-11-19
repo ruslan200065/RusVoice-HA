@@ -30,3 +30,25 @@ def test_reject_bad_streaming(tmp_path, monkeypatch):
     monkeypatch.delenv("RUSVOICE_OPTIONS", raising=False)
     with pytest.raises(ValueError):
         load_options(file)
+
+
+def test_supertonic_valid_options(tmp_path, monkeypatch):
+    file = tmp_path / 'options.json'
+    file.write_text(json.dumps({'tts_engine': 'supertonic', 'supertonic_steps': 2, 'supertonic_speaker': 9}))
+    monkeypatch.delenv('RUSVOICE_OPTIONS', raising=False)
+    data = load_options(file)
+    assert data['tts_engine'] == 'supertonic'
+    assert data['supertonic_steps'] == 2
+
+
+@pytest.mark.parametrize('key,value', [
+    ('supertonic_speaker', 12), ('supertonic_speaker', True),
+    ('supertonic_steps', 0), ('tts_engine', 'some-command'),
+    ('tts_threads', 7), ('tts_speed', 0),
+])
+def test_reject_invalid_new_options(tmp_path, monkeypatch, key, value):
+    file = tmp_path / 'options.json'
+    file.write_text(json.dumps({key: value}))
+    monkeypatch.delenv('RUSVOICE_OPTIONS', raising=False)
+    with pytest.raises(ValueError):
+        load_options(file)

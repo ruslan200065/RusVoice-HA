@@ -14,3 +14,5 @@ jobs:
       - run: python -m compileall -q rusvoice/app
       - run: python -m pytest -q tests
       - run: python -c "import yaml; a=yaml.safe_load(open('rusvoice/config.yaml')); assert a['slug']=='rusvoice'; assert 'amd64' in a['arch']"
+      - name: Build add-on Docker image (amd64)
+        run: docker build -t rusvoice-ha:ci ./rusvoice

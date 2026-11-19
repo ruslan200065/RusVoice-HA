@@ -15,9 +15,10 @@ from pydantic import BaseModel, Field
 from wyoming.asr import Transcribe, Transcript, TranscriptChunk
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.client import AsyncTcpClient
-from wyoming.tts import Synthesize
+from wyoming.tts import Synthesize, SynthesizeVoice
 
 from .settings import load_options
+from .models import ensure_piper, ensure_vosk, ensure_supertonic
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOG = logging.getLogger("rusvoice")
@@ -28,6 +29,7 @@ BACKENDS = {"tts": 10200, "stt": 10300}
 
 class TextInput(BaseModel):
     text: str = Field(min_length=1, max_length=900)
+    speaker: int | None = Field(default=None, ge=0, le=9)
 
 
 class Runtime:
@@ -35,6 +37,12 @@ class Runtime:
         self.processes = {}
         self.tasks = {}
         self.last_exit = {}
+        self.downloads = {"stt": {"phase": "pending"}, "tts": {"phase": "pending"}}
+
+    def progress(self, name, **update):
+        # Updates originate in the model-downloader worker thread.
+        self.downloads[name] = {**self.downloads.get(name, {}), **update}
+
 
     def command(self, name):
         if name == "stt":
@@ -45,22 +53,27 @@ class Runtime:
             if not OPTS["stt_streaming"]:
                 cmd.append("--no-streaming")
             return cmd
-        cmd = [sys.executable, "-m", "wyoming_piper", "--uri", "tcp://0.0.0.0:10200",
-               "--voice", OPTS["voice"], "--data-dir", str(DATA / "piper"),
-               "--download-dir", str(DATA / "piper"),
-               "--length-scale", str(OPTS["length_scale"]),
-               "--noise-scale", str(OPTS["noise_scale"]),
-               "--noise-w", str(OPTS["noise_w"]), "--samples-per-chunk", "1024"]
-        if not OPTS["tts_streaming"]:
-            cmd.append("--no-streaming")
-        return cmd
+        return [sys.executable, "-m", "app.tts_backend"]
+
+    async def prepare_model(self, name):
+        progress = lambda **state: self.progress(name, **state)
+        if name == "stt":
+            await asyncio.to_thread(ensure_vosk, DATA / "vosk", progress)
+        elif OPTS["tts_engine"] == "supertonic":
+            await asyncio.to_thread(ensure_supertonic, DATA / "supertonic", progress)
+        else:
+            await asyncio.to_thread(ensure_piper, DATA / "piper", OPTS["voice"], progress)
 
     async def supervise(self, name):
         while True:
             proc = None
             try:
+                self.progress(name, phase="checking")
+                await self.prepare_model(name)
+                self.progress(name, phase="loading", error=None)
                 LOG.info("Starting %s Wyoming server", name)
                 proc = await asyncio.create_subprocess_exec(*self.command(name))
+                self.progress(name, phase="installed")
                 self.processes[name] = proc
                 returncode = await proc.wait()
                 self.last_exit[name] = returncode
@@ -75,9 +88,10 @@ class Runtime:
                         proc.kill()
                         await proc.wait()
                 raise
-            except Exception:
+            except Exception as exc:
+                self.progress(name, phase="error", error=str(exc)[:350])
                 LOG.exception("Unable to start %s", name)
-                await asyncio.sleep(10)
+                await asyncio.sleep(30)
             finally:
                 if self.processes.get(name) is proc:
                     self.processes.pop(name, None)
@@ -85,6 +99,7 @@ class Runtime:
     async def start(self):
         (DATA / "piper").mkdir(parents=True, exist_ok=True)
         (DATA / "vosk").mkdir(parents=True, exist_ok=True)
+        (DATA / "supertonic").mkdir(parents=True, exist_ok=True)
         for name in BACKENDS:
             self.tasks[name] = asyncio.create_task(self.supervise(name), name=f"wyoming-{name}")
 
@@ -106,7 +121,7 @@ async def lifespan(_app):
         await runtime.stop()
 
 
-app = FastAPI(title="RusVoice HA", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None)
+app = FastAPI(title="RusVoice HA", version="0.2.0", lifespan=lifespan, docs_url=None, redoc_url=None)
 
 
 def authorize(request: Request):
@@ -133,27 +148,29 @@ async def index():
 @app.get("/api/status")
 async def status(request: Request):
     authorize(request)
-    return {"name": "RusVoice HA", "version": "0.1.0", "language": "ru",
-            "voice": OPTS["voice"], "stt_model": OPTS["stt_model"],
+    return {"name": "RusVoice HA", "version": "0.2.0", "language": "ru",
+            "tts_engine": OPTS["tts_engine"], "voice": OPTS["voice"] if OPTS["tts_engine"] == "piper" else f"supertonic-3 / speaker {OPTS['supertonic_speaker']}", "stt_model": OPTS["stt_model"],
+            "downloads": runtime.downloads,
             "streaming": {"stt": OPTS["stt_streaming"], "tts": OPTS["tts_streaming"]},
             "wyoming": {name: {"port": port, "ready": await ready(port),
                                 "last_exit": runtime.last_exit.get(name)}
                         for name, port in BACKENDS.items()}}
 
 
-async def wyoming_tts(text: str):
+async def wyoming_tts(text: str, speaker: int | None = None):
     client = AsyncTcpClient("127.0.0.1", 10200, connect_timeout=3, read_timeout=120)
     await client.connect()
     try:
-        await client.write_event(Synthesize(text=text).event())
+        await client.write_event(Synthesize(text=text,
+                      voice=SynthesizeVoice(speaker=str(speaker)) if speaker is not None and OPTS["tts_engine"] == "supertonic" else None).event())
         while True:
             event = await client.read_event()
             if event is None:
-                raise RuntimeError("Piper closed connection before audio-start")
+                raise RuntimeError("TTS closed connection before audio-start")
             if AudioStart.is_type(event.type):
                 return client, AudioStart.from_event(event)
             if event.type == "error":
-                raise RuntimeError(str(event.data.get("text", "Piper error")))
+                raise RuntimeError(str(event.data.get("text", "TTS error")))
     except BaseException:
         await client.disconnect()
         raise
@@ -166,7 +183,7 @@ async def tts_audio(client):
             if event is None or AudioStop.is_type(event.type):
                 return
             if event.type == "error":
-                raise RuntimeError(str(event.data.get("text", "Piper error")))
+                raise RuntimeError(str(event.data.get("text", "TTS error")))
             if AudioChunk.is_type(event.type):
                 yield AudioChunk.from_event(event).audio
     finally:
@@ -177,7 +194,7 @@ async def tts_audio(client):
 async def tts(body: TextInput, request: Request):
     authorize(request)
     try:
-        client, fmt = await wyoming_tts(body.text)
+        client, fmt = await wyoming_tts(body.text, body.speaker)
         output = io.BytesIO()
         with wave.open(output, "wb") as wav:
             wav.setnchannels(fmt.channels)
@@ -196,7 +213,7 @@ async def tts_stream(body: TextInput, request: Request):
     """Progressive PCM16 bytes. Read format from response headers."""
     authorize(request)
     try:
-        client, fmt = await wyoming_tts(body.text)
+        client, fmt = await wyoming_tts(body.text, body.speaker)
     except (OSError, RuntimeError, TimeoutError) as exc:
         raise HTTPException(503, "TTS unavailable") from exc
     return StreamingResponse(tts_audio(client), media_type="application/octet-stream",

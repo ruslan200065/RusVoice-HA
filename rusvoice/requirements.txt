@@ -1,5 +1,7 @@
 fastapi==0.115.12
 uvicorn==0.34.2
 wyoming==1.10.2
-wyoming-piper==2.5.4
+piper-tts>=1.8.0,<2
+sherpa-onnx==1.13.8
+vosk==0.3.45
 wyoming-vosk @ https://github.com/rhasspy/wyoming-vosk/archive/refs/heads/master.tar.gz

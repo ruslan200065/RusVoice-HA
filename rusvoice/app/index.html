@@ -11,20 +11,45 @@ small{color:#99a8c4}.meta{font-size:14px;color:#ccd5e7;margin-top:14px;overflow-
 button{border:0;background:#6d5af3;color:#fff;border-radius:11px;padding:12px 18px;font-weight:700;cursor:pointer}button.secondary{background:#293751}button:disabled{opacity:.45;cursor:wait}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.hint{font-size:13px;color:#a1afc9;line-height:1.5}.result{min-height:54px;background:#10182a;border-radius:12px;border:1px dashed #3c4966;padding:14px;margin-top:12px;overflow-wrap:anywhere}.footer{text-align:center;margin:22px;color:#8490ad;font-size:12px}
 </style></head><body><main>
 <header class="top"><div class="logo">🎙</div><div><h1>RusVoice <span style="color:#a99fff">HA</span></h1><p class="sub">Локальный русский голос для Home Assistant</p></div></header>
-<section class="cards"><article class="card"><h2>Распознавание · STT</h2><span class="pill" id="stt-pill">Проверка…</span><div class="meta" id="stt-model">Vosk</div><small>Wyoming 10300 · промежуточный текст</small></article>
-<article class="card"><h2>Синтез · TTS</h2><span class="pill" id="tts-pill">Проверка…</span><div class="meta" id="tts-model">Piper</div><small>Wyoming 10200 · выдача звуковых фрагментов</small></article></section>
-<section class="card"><h2>🔊 Проверить русский голос</h2><textarea id="speech">Привет! Я RusVoice, локальный голосовой помощник умного дома. Готов выполнять твои команды.</textarea><div class="actions"><button id="speak">▶ Озвучить</button><button class="secondary" id="refresh">↻ Обновить состояние</button></div><p class="hint" id="tts-info">WAV тестовый плеер дожидается готового ответа. Для потокового PCM используйте API /api/tts/stream.</p></section>
+<section class="cards"><article class="card"><h2>Распознавание · STT</h2><span class="pill" id="stt-pill">Проверка…</span><div class="meta" id="stt-model">Vosk</div><p class="hint" id="stt-download">Проверяю загрузку модели…</p><small>Wyoming 10300 · промежуточный текст</small></article>
+<article class="card"><h2>Синтез · TTS</h2><span class="pill" id="tts-pill">Проверка…</span><div class="meta" id="tts-model">Piper</div><p class="hint" id="tts-download">Проверяю загрузку голоса…</p><small>Wyoming 10200 · выдача звуковых фрагментов</small></article></section>
+<section class="card"><h2>🔊 Проверить русский голос</h2><textarea id="speech">Привет! Я RusVoice, локальный голосовой помощник умного дома. Готов выполнять твои команды.</textarea><div id="speaker-row" style="display:none;margin-top:10px"><label for="speaker">Голос Supertonic (переключается сразу): </label><select id="speaker" style="padding:8px;background:#0e1524;color:#fff;border:1px solid #3e4b65;border-radius:8px"></select></div><div class="actions"><button id="speak">▶ Озвучить</button><button class="secondary" id="refresh">↻ Обновить состояние</button></div><p class="hint" id="tts-info">Потоковое воспроизведение PCM без ожидания полного WAV. Измеряется время до первого звука.</p></section>
 <section class="card"><h2>🎤 Проверить микрофон</h2><p class="hint">Используется потоковый PCM16/16 кГц WebSocket. Доступ к микрофону браузер обычно разрешает только на HTTPS или localhost.</p><div class="actions"><button id="record">● Начать говорить</button><button class="secondary" id="stop" disabled>■ Закончить</button></div><div class="result" id="transcript">Здесь появится распознанный текст…</div></section>
 <section class="card"><h2>⚙ Доступ к API</h2><p class="hint">Выбор голосов и режимов находится в параметрах аддона Home Assistant. Изменение параметров требует перезапуска. Порт веб-панели 8099 по умолчанию не опубликован, доступ осуществляется через Ingress.</p><input id="token" type="password" autocomplete="off" placeholder="API-токен (только если задан в настройках)"><p class="hint" id="error"></p></section>
-<div class="footer">RusVoice HA • Local by design • Vosk + Piper + Wyoming</div>
+<div class="footer">RusVoice HA 0.2 • Local by design • Vosk + Piper direct + Supertonic 3 + Wyoming</div>
 </main><script>
 const $=id=>document.getElementById(id);
 const url=path=>new URL(path,location.href).toString();
 function headers(){const h={'Content-Type':'application/json'};if($('token').value)h.Authorization='Bearer '+$('token').value;return h;}
+for(let i=0;i<10;i++){$('speaker').add(new Option('Голос №'+(i+1),String(i)));}
 function pill(id,ready){$(id).textContent=ready?'● Готов':'○ Загрузка / недоступен';$(id).className='pill '+(ready?'ok':'bad');}
-async function refresh(){try{const r=await fetch(url('api/status'),{headers:headers()});if(!r.ok)throw Error('HTTP '+r.status);const d=await r.json();pill('stt-pill',d.wyoming.stt.ready);pill('tts-pill',d.wyoming.tts.ready);$('stt-model').textContent=d.stt_model;$('tts-model').textContent=d.voice;$('error').textContent='';}catch(e){$('error').textContent='Статус: '+e.message;}}
-$('refresh').onclick=refresh;$('token').addEventListener('change',refresh);refresh();setInterval(refresh,10000);
-$('speak').onclick=async()=>{const b=$('speak');b.disabled=true;$('tts-info').textContent='Синтезируем…';const t=performance.now();try{const r=await fetch(url('api/tts'),{method:'POST',headers:headers(),body:JSON.stringify({text:$('speech').value})});if(!r.ok)throw Error('HTTP '+r.status);const blob=await r.blob();const uri=URL.createObjectURL(blob);const audio=new Audio(uri);audio.onended=()=>URL.revokeObjectURL(uri);await audio.play();$('tts-info').textContent='Аудио готово за '+((performance.now()-t)/1000).toFixed(2)+' с. (включая запрос и синтез)';}catch(e){$('tts-info').textContent='Ошибка: '+e.message;}finally{b.disabled=false;}};
+function progress(v){if(!v)return 'Ожидает загрузки';const names={pending:'Ожидание',checking:'Проверка локальных файлов',connecting:'Соединение с источником',downloading:'Загрузка',extracting:'Распаковка',installed:'Модель скачана',loading:'Запуск модели',error:'Ошибка загрузки'};let s=names[v.phase]||v.phase||'Ожидание';if(v.phase==='downloading'){s+=': '+(v.file||'модель')+' · '+(v.received/1048576).toFixed(1)+' МБ';if(v.total)s+=' / '+(v.total/1048576).toFixed(1)+' МБ ('+Math.round(v.received/v.total*100)+'%)';if(v.speed)s+=' · '+(v.speed/1048576).toFixed(2)+' МБ/с';}if(v.error)s+=': '+v.error;return s;}
+async function refresh(){try{const r=await fetch(url('api/status'),{headers:headers()});if(!r.ok)throw Error('HTTP '+r.status);const d=await r.json();pill('stt-pill',d.wyoming.stt.ready);pill('tts-pill',d.wyoming.tts.ready);$('stt-model').textContent=d.stt_model;$('tts-model').textContent=d.tts_engine.toUpperCase()+' · '+d.voice;$('speaker-row').style.display=d.tts_engine==='supertonic'?'block':'none';$('stt-download').textContent=progress(d.downloads?.stt);$('tts-download').textContent=progress(d.downloads?.tts);$('error').textContent='';}catch(e){$('error').textContent='Статус: '+e.message;}}
+$('refresh').onclick=refresh;$('token').addEventListener('change',refresh);refresh();setInterval(refresh,3000);
+$('speak').onclick=async()=>{const b=$('speak');b.disabled=true;$('tts-info').textContent='Ожидаю первые аудиоданные…';const t=performance.now();let ac=null;
+try{
+ const r=await fetch(url('api/tts/stream'),{method:'POST',headers:headers(),body:JSON.stringify({text:$('speech').value,speaker:$('speaker-row').style.display==='block'?Number($('speaker').value):null})});
+ if(!r.ok)throw Error('HTTP '+r.status);
+ const rate=Number(r.headers.get('X-Audio-Rate'))||24000,channels=Number(r.headers.get('X-Audio-Channels'))||1,width=Number(r.headers.get('X-Audio-Width'))||2;
+ if(channels!==1||width!==2)throw Error('Тестовый плеер поддерживает только mono PCM16');
+ ac=new AudioContext();await ac.resume();let nextTime=ac.currentTime+.05;let tail=new Uint8Array(0),received=false;
+ const reader=r.body.getReader();
+ while(true){const {done,value}=await reader.read();if(done)break;
+ const combined=new Uint8Array(tail.length+value.length);combined.set(tail);combined.set(value,tail.length);
+ const frameBytes=Math.min(combined.length-(combined.length%2),16384);tail=combined.slice(frameBytes);
+ if(frameBytes===0)continue;
+ const view=new DataView(combined.buffer,combined.byteOffset,frameBytes), count=frameBytes/2;
+ const buffer=ac.createBuffer(1,count,rate),audio=buffer.getChannelData(0);
+ for(let i=0;i<count;i++)audio[i]=view.getInt16(i*2,true)/32768;
+ const node=ac.createBufferSource();node.buffer=buffer;node.connect(ac.destination);
+ nextTime=Math.max(nextTime,ac.currentTime+.025);node.start(nextTime);nextTime+=count/rate;
+ if(!received){received=true;$('tts-info').textContent='Первый звук через '+((performance.now()-t)/1000).toFixed(2)+' с. · потоковое воспроизведение';}
+ }
+ if(!received)throw Error('Сервер не вернул аудио');
+ $('tts-info').textContent+=' · аудио воспроизводится';
+ const end=nextTime-ac.currentTime;if(end>0)await new Promise(res=>setTimeout(res,end*1000));
+ }catch(e){$('tts-info').textContent='Ошибка синтеза: '+e.message;}finally{if(ac)await ac.close();b.disabled=false;}
+};
 let micStream,ctx,source,processor,socket;
 function downsample(buf,from,to){const n=Math.floor(buf.length*to/from),out=new Int16Array(n);for(let i=0;i<n;i++){const v=Math.max(-1,Math.min(1,buf[Math.floor(i*from/to)]));out[i]=v<0?v*32768:v*32767;}return out;}
 function finishMic(){if(processor){processor.disconnect();processor.onaudioprocess=null;}if(source)source.disconnect();if(micStream)micStream.getTracks().forEach(t=>t.stop());if(ctx)ctx.close();processor=source=micStream=ctx=null;$('record').disabled=false;$('stop').disabled=true;}
