@@ -1,0 +1,1 @@
+"""RusVoice HA add-on."""

@@ -1,0 +1,5 @@
+fastapi==0.115.12
+uvicorn==0.34.2
+wyoming==1.10.2
+wyoming-piper==2.5.4
+wyoming-vosk @ https://github.com/rhasspy/wyoming-vosk/archive/refs/heads/master.tar.gz

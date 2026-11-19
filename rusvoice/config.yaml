@@ -1,0 +1,41 @@
+name: RusVoice HA
+slug: rusvoice
+version: 0.1.0
+url: https://github.com/ruslan200065/RusVoice-HA
+description: Локальные потоковые STT (Vosk) и TTS (Piper) для Home Assistant
+arch:
+  - amd64
+startup: application
+boot: auto
+init: false
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:microphone-message
+panel_title: RusVoice
+ports:
+  10200/tcp: 10200
+  10300/tcp: 10300
+  8099/tcp: null
+ports_description:
+  10200/tcp: Wyoming TTS / Piper
+  10300/tcp: Wyoming STT / Vosk
+  8099/tcp: HTTP API (по умолчанию только через HA Ingress)
+options:
+  voice: ru_RU-dmitri-medium
+  stt_model: vosk-model-small-ru-0.22
+  stt_streaming: true
+  tts_streaming: true
+  length_scale: 1.0
+  noise_scale: 0.667
+  noise_w: 0.333
+  api_token: ""
+schema:
+  voice: list(ru_RU-dmitri-medium|ru_RU-denis-medium|ru_RU-irina-medium|ru_RU-ruslan-medium)
+  stt_model: list(vosk-model-small-ru-0.22)
+  stt_streaming: bool
+  tts_streaming: bool
+  length_scale: float(0.5,2.0)
+  noise_scale: float(0.0,2.0)
+  noise_w: float(0.0,2.0)
+  api_token: str?
+homeassistant: 2024.4.0
